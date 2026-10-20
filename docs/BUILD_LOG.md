@@ -14,7 +14,7 @@ before reuse (noted per phase).
 ### Checklist
 
 - [x] Phase 0 — Scaffold + preflight
-- [ ] Phase 1 — LAUS ingest -> raw
+- [x] Phase 1 — LAUS ingest -> raw
 - [ ] Phase 2 — LAUS staging + tests
 - [ ] Phase 3 — County reference + month spine + geography gaps
 - [ ] Phase 4 — FRED
@@ -35,3 +35,21 @@ before reuse (noted per phase).
 - Preflight: MotherDuck authenticated, FRED key accepted, BLS reachable with contact User-Agent.
   `PREFECT_API_KEY`/`PREFECT_API_URL` not set -> warning; flows run locally.
 - Elapsed at end of phase 0: ~4 min.
+
+### Phase 1 — LAUS ingest -> raw
+
+Verified facts (re-checked 2026-10-20 from `la.txt`, `la.series`, `la.measure`, `la.period`, `la.area_type`, `la.footnote`):
+- County series ID = `LA` + `U` + `CN` + 5-digit county FIPS + `00000000` + 2-digit measure, e.g. `LAUCN010010000000003`.
+  `la.series` has 3,225 county areas (area_type `F` = "Counties and equivalents"), each with measures 03-06, all seasonal code `U`
+  (not seasonally adjusted). 78 of them are Puerto Rico (state 72), excluded by design (state table = 50 states + DC).
+- Measures: 03 unemployment rate, 04 unemployment, 05 employment, 06 labor force. Periods `M01`-`M12` months, `M13` annual average.
+- Data file: tab-delimited, space-padded, CRLF, header row. Missing value marker `-` with footnote `X` (2025 lapse in
+  appropriations): 12,572 rows, all 2025 M10. Footnote `P` = preliminary (latest month, 2026 M08). Footnote `G` on 2025 annual averages.
+- `src/ingest/laus.py`: stream to temp file (deleted in `finally`), filter in DuckDB `read_csv`, one `INSERT ... SELECT`.
+  Filter documented: county series, chosen states, measures 03-06, `year >= laus_min_year` (2012).
+- Smoke WV/VA/OH: 209,760 rows. Full: 2,388,276 rows, 12,576 series (3,144 counties), 51 states, years 2012-2026, ~27 s.
+- Idempotency: the smoke and full runs were both today's snapshot; after the full run the table holds exactly one copy
+  (2,388,276 rows, 0 duplicate series x year x period x snapshot keys). Same-day rerun replaces the whole day's snapshot
+  (simplest rule; a smoke run must therefore be followed by a full run on the same day).
+- Deviation: the earlier build's raw table (same columns) was reused; its same-day snapshot was replaced.
+- Elapsed at end of phase 1: ~6 min.

@@ -37,6 +37,14 @@ It never prints secret values.
 **`tests/conftest.py` / `tests/unit/test_config.py`** — `conftest.py` skips warehouse (integration) tests when no
 MotherDuck token exists and shares one connection. `test_config.py` checks the config loads and the state table has 51 rows.
 
+### Ingest (raw layer)
+
+**`src/ingest/laus.py`** — The `ingest_laus` Prefect flow. It streams the ~340 MB BLS county file to a temp file,
+lets DuckDB read and filter it (county series, chosen states, the four measures, years from 2012), and inserts the
+result into `raw.laus_county` in a single statement, then deletes the temp file. Values stay as text in raw so we keep
+exactly what BLS published; typing happens in staging. Each load is stamped with `_snapshot_date`; rerunning on the same
+day first deletes that day's snapshot, so reruns never create duplicates.
+
 ## Interview questions
 
 **Q: Why a separate preflight script?** A: Loads take minutes; a bad token should fail in seconds with a clear
@@ -44,3 +52,9 @@ message listing every problem, not mid-pipeline.
 
 **Q: Why put settings in YAML instead of constants?** A: Thresholds, dates and state lists change between experiments
 and smoke runs; keeping them in one file means no code edits and an auditable record of what was run.
+
+**Q: Why keep raw data as text with a snapshot date?** A: Raw is an untouched copy of the source, so any cleaning bug
+can be fixed by rebuilding staging. Snapshot dates build a history of what BLS published each month, since BLS revises past values.
+
+**Q: What makes the ingest idempotent?** A: Before inserting, it deletes rows with today's `_snapshot_date` inside one
+transaction, so running twice on the same day leaves exactly one copy.
