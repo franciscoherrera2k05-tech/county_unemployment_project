@@ -1,3 +1,6 @@
+# Project settings. Every script reads this file with yaml.safe_load; nothing is hardcoded in code.
+# Simplified from CLAUDE.md section 5 under the simplicity rules: no storage/retention block,
+# no FRED initial-release switch, and the FRED lag is a plain fixed lag per series.
 project:
   database: unemployment
   random_seed: 42
@@ -6,13 +9,9 @@ data:
   laus_min_year: 2012          # history for 36-month lookback features
   panel_start: 2015-01-01      # ~11 years: expansion, 2015-16 energy bust, COVID, inflation/rate cycle
 timing:
-  laus_release_lag_months: 2   # conservative; verify against the BLS release schedule
-  fred_use_initial_release: true
-  fred_fallback_lag_months: {UNRATE: 1, FEDFUNDS: 1, CPIAUCSL: 2, T10Y2Y: 1, INDPRO: 2, PAYEMS: 1, ICSA: 1}
+  laus_release_lag_months: 2   # county data for month t is published early in month t+2 (BLS schedule)
+  fred_lag_months: {UNRATE: 1, FEDFUNDS: 1, CPIAUCSL: 2, T10Y2Y: 1, INDPRO: 2, PAYEMS: 1, ICSA: 1}
 target:
   horizon_months: 3
   threshold_pp: 0.5
   sensitivity_thresholds: [0.3, 0.5, 0.75, 1.0]
-storage:
-  raw_snapshot_retention: 12
-  warn_db_size_gb: 7           # MotherDuck free tier is ~10 GB

@@ -2,86 +2,36 @@
 
 Resume point for the staged build. Times are UTC wall clock.
 
-## Stage 1 — Pipeline
+## Stage 1 — Pipeline (restart under simplicity rules)
 
-- **Start:** 2026-10-20 21:22:40 UTC
+**Restarted under simplicity rules; earlier phases 0–3 (commits 1b5840e..3889644) are superseded.** The user deleted
+the earlier, more complex files; the phase 0 commit of this restart records those deletions together with the
+CLAUDE.md and agent-file edits that add the simplicity rules. Verified facts from the earlier log were re-checked
+before reuse (noted per phase).
+
+- **Start:** 2026-10-20 21:51:05 UTC
 
 ### Checklist
 
 - [x] Phase 0 — Scaffold + preflight
-- [x] Phase 1 — LAUS ingest -> raw
-- [x] Phase 2 — LAUS staging + tests
-- [x] Phase 3 — County reference + month spine + geography gaps
+- [ ] Phase 1 — LAUS ingest -> raw
+- [ ] Phase 2 — LAUS staging + tests
+- [ ] Phase 3 — County reference + month spine + geography gaps
 - [ ] Phase 4 — FRED
-- [ ] Phase 5 — Panel + target + leakage test
+- [ ] Phase 5 — Panel + target + leakage check
 - [ ] Phase 6 — Wrap-up
 
 ### Phase 0 — Scaffold + preflight
 
-- `uv` was not installed in the Codespace; installed via the official astral installer (uv 0.13.4). Python 3.12 pinned in `.python-version`.
-- Project is a non-packaged uv project (`[tool.uv] package = false`); code imported as `src.*` (pytest `pythonpath = ["."]`).
+- uv 0.13.4, Python 3.12 (`.python-version`), non-packaged uv project (`[tool.uv] package = false`), imports as `src.*`.
 - Stage 1 dependencies only: duckdb 1.5.6, prefect 3.8.8, requests, pyyaml, python-dotenv, pytest.
-- Preflight (`uv run python scripts/preflight.py`): MotherDuck authenticated, FRED key accepted, BLS download reachable with
-  contact User-Agent. `PREFECT_API_KEY` / `PREFECT_API_URL` not set -> warning only; flows run locally (ephemeral Prefect).
-- Integration tests are auto-skipped if `MOTHERDUCK_TOKEN` is absent (conftest).
-- Elapsed at end of phase 0: ~6 min.
-
-### Phase 1 — LAUS ingest -> raw
-
-Verified facts (from `la.txt`, `la.series`, `la.measure`, `la.period`, `la.footnote`, and real rows, 2026-10-20):
-- County series ID = `LA` + seasonal `U` + area_code `CN` + 5-digit county FIPS + `00000000` + 2-digit measure,
-  e.g. `LAUCN540010000000003` (20 chars). FIPS = chars 6-10; state FIPS = chars 6-7; measure = last 2.
-- Measures confirmed: 03 unemployment rate, 04 unemployment, 05 employment, 06 labor force (07-09 exist but not for county files we use).
-- `M01`-`M12` months, `M13` annual average (kept in raw, excluded in staging). All county series are `U` (not seasonally adjusted).
-- Data file is tab-delimited, fixed-width padded, CRLF line endings, header row. `la.data.64.County` = 337 MB.
-- Missing value marker is `-` with footnote `X`. In the 2026-10-20 file it occurs only for **2025 M10** in every county:
-  footnote G says October 2025 data were not collected due to the federal government shutdown.
-- Footnote `P` (preliminary) appears on the latest month (2026 M08). Footnote codes kept.
-- Latest county month in the file: 2026 M08 for nearly all counties; 3 counties (Los Angeles CA, DC, Miami-Dade FL) already have 2026 M09
-  (they double as sub-state areas with earlier releases).
-- `la.series` lists 78 Puerto Rico (72) county-equivalents; excluded because the spec's state table is 50 states + DC.
-- Connecticut is already published as 9 planning regions (FIPS 09110-09190) back to 1990, so no CT discontinuity inside our window.
-- Alaska: Valdez-Cordova (02261) ends 2019; Chugach (02063) and Copper River (02066) start 2020 -> geography gap (handled in phase 3).
-
-Implementation:
-- `src/ingest/laus.py` (`ingest_laus` flow): stream file to a temp file (deleted in `finally`), filter in DuckDB (`read_csv` all varchar,
-  county series, requested states, measures 03-06, `year >= laus_min_year` = 2012), single `INSERT ... SELECT` into `raw.laus_county`.
-- Idempotency: same-day rerun deletes that day's snapshot rows **for the loaded states only**, then inserts (one transaction);
-  retention pruning keeps the latest `raw_snapshot_retention` snapshot dates.
-- Smoke test WV/VA/OH: 209,760 rows (276 counties x 4 measures x 190 periods). Full run: 2,388,276 rows, 12,576 series (3,144 counties), 51 states.
-  Rerunning WV on the same day left the total unchanged (idempotent). Full download+load ~25 s.
-- Deviation: Prefect 3.8.8's local ephemeral server fails to import with fastapi 0.156 (`Body(min_items=...)` removed);
-  pinned `fastapi>=0.139,<0.150` (resolved 0.149.0).
-- Elapsed at end of phase 1: ~7 min.
-
-### Phase 2 — LAUS staging + tests
-
-- `sql/staging/laus_county_month.sql` -> `staging.laus_county_month` (553,075 rows). Latest snapshot **per series** (so a later
-  partial smoke snapshot never hides other states). Pivots measures 03-06; `month` = first of month from `M01`-`M12`; `M13` excluded;
-  `-` -> NULL with `is_missing_marker`; footnotes kept as a sorted comma list; `is_preliminary` from footnote `P`;
-  `available_date = month + laus_release_lag_months` (2).
-- SQL files are rendered with config parameters by `src/utils/sql.py` (no hardcoded thresholds/dates).
-- Tests: unit (FIPS padding, month parsing, M13 exclusion, missing marker, preliminary flag, lag, latest snapshot) and
-  integration (raw/staging grain, 5-char FIPS, rate in [0,100], available_date > month, nulls only where marker, LF >= employment,
-  nulls only in 2025-10). 10 passed.
-- Elapsed at end of phase 2: ~8 min.
-
-### Phase 3 — County reference + month spine + geography gaps
-
-- `ingest_fips` flow (`src/ingest/fips.py`): reads `la.area_type` to find the code for "Counties and equivalents" (verified = `F`),
-  streams `la.area` to a temp file, keeps `F` rows with `CN` area codes joined to the static 51-row state table -> `ref.county`
-  (3,147 counties, 51 states; Puerto Rico's 78 municipios excluded by design). County name = area_text without the ", XX" suffix.
-- `ref.month_spine`: 3,144 counties (those in ref.county with any staging row) x 176 months (2012-01..2026-08) = 553,344 rows.
-  Spine end = latest month with non-null rates for >= 50% of counties (2026-08; the 3 counties with 2026-09 data are ahead of the release).
-  `is_national_gap_month` flags months with < 50% coverage: only **2025-10** (shutdown; BLS footnote G). It is not treated as a county gap.
-- `ref.geography_gap_report` (one row per county) and `ref.county_exclusions` (status <> ok). **6 ref counties flagged, all Alaska:**
-  - no data in window (discontinued 2009-2010 Alaska census areas): 02201 Prince of Wales-Outer Ketchikan, 02232 Skagway-Hoonah-Angoon, 02280 Wrangell-Petersburg
-  - disappears early: 02261 Valdez-Cordova (ends 2019-12)
-  - appears late: 02063 Chugach, 02066 Copper River (start 2020-01; Valdez-Cordova split)
-  - Of the 3,144 counties with data in the window, 3 are excluded (0.095%); their average labor force is ~10.1k of ~162.2M total (~0.006%).
-- No discontinuities found for Connecticut (BLS re-estimated the 9 planning regions back to 1990) or Virginia (no independent-city
-  series in our window appear/disappear; Bedford city is absent from the current files).
-- Ref tables are rebuilt by DELETE + INSERT in a transaction (CREATE OR REPLACE kept for staging/marts per spec); added `sql/ref/`.
-- Tests: ref.county grain/FIPS/51 states, staging counties all in ref.county, spine grain + no gaps + rows = counties x months,
-  gap-report coverage, exclusion consistency, non-excluded counties fully observed outside national-gap months. 14 passed.
-- Elapsed at end of phase 3: ~9 min.
+- Re-verified: Prefect 3.8.8's temporary local server crashes with fastapi 0.156 (`Body(min_items=...)` removed).
+  Pinned `fastapi>=0.139,<0.150` (resolves 0.149.0); a test flow then runs.
+- One helper module `src/utils/helpers.py` (config via `yaml.safe_load`, MotherDuck connect, retrying GET, temp download,
+  SQL-file runner, state FIPS table). No custom config loader, no retention/pruning, no DB-size warnings.
+- Config deviations from CLAUDE.md section 5 (simplicity rules): dropped the `storage` block and
+  `fred_use_initial_release`; renamed `fred_fallback_lag_months` to `fred_lag_months` (it is now the only FRED timing rule).
+- No `src/features/` package: all feature logic is plain SQL in `sql/marts/`.
+- Preflight: MotherDuck authenticated, FRED key accepted, BLS reachable with contact User-Agent.
+  `PREFECT_API_KEY`/`PREFECT_API_URL` not set -> warning; flows run locally.
+- Elapsed at end of phase 0: ~4 min.

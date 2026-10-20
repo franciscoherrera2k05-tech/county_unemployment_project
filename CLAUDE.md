@@ -281,3 +281,12 @@ employed by industry. Add `raw.acs_county` and `staging.acs_county`; `available_
 vintage_offset_years)-{month}-{day}`; as-of join on `available_date <= d_t`; derive poverty rate, bachelor's+
 share, log income, log population, and industry shares; extend the leakage test to cover it. Expect county
 FIPS mismatches between LAUS and ACS (Connecticut, Alaska, Virginia) and handle them with an exclusion report.
+
+## Simplicity rules (override anything more complex above)”, then resume Stage 1 following it. If any code already written breaks these rules, simplify it before continuing.
+
+Prefer extremely plain novice, maybe intermediate SQL files and short, single-purpose Python functions. Put a plain-English comment at the top of every file saying what it does, what goes in, and what comes out.
+Cut optional complexity: no snapshot retention or pruning, no DB-size warnings, no custom config loader (just yaml.safe_load), and no more than a handful of focused tests.
+FRED: use the simple approach. A value for month M is treated as available at the end of month M plus a fixed lag in months from config. Skip the initial-release logic, and list revised data as a limitation.
+Keep the leakage test, but in its simplest form: a check that no feature uses a row dated after the prediction month.
+Keep these ideas, since they are the interview story: raw/staging/marts layers, point-in-time correctness, the target definition, and idempotent monthly runs.
+Maintain docs/WALKTHROUGH.md: for every file, 3 to 5 plain-English sentences on what it does and why, plus 2 to 3 likely interview questions with short answers. Update it at the end of every phase.

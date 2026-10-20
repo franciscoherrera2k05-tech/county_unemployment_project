@@ -1,3 +1,4 @@
+# Secrets, local scratch data, caches. Never commit data or .env.
 .env
 data/
 __pycache__/

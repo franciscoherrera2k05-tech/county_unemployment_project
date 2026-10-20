@@ -44,14 +44,33 @@ test or the point-in-time rules. Bulk-load data; never insert row by row.
    `available_date`.
 3. **County reference + month spine.** Build `ref.county` from `la.area`/`la.area_type`, build `ref.month_spine`,
    and produce the geography-gap report and exclusion list, quantified.
-4. **FRED.** Verify each series and the `output_type=4` initial-release behavior with a real call; fall back to
-   assumed lags if needed and log it. Monthly aggregation, `available_date`, change features.
-5. **Panel + target + leakage test.** Build `marts.county_month_panel` with an `ASOF JOIN` for FRED and the
-   LAUS-derived cross-county context features. Write the **leakage perturbation test** and make it pass before
-   moving on.
+4. **FRED.** Verify each series exists and check its frequency. Keep it simple: a value for reference month M is
+   treated as available in month `M + lag` (lag per series from config). No initial-release logic; list revised
+   data as a limitation. Daily/weekly series become monthly means. In staging, add `available_month` and pivot to
+   one row per `available_month`, one column per series.
+5. **Panel + target + leakage check.** Build `marts.county_month_panel` using only **equality joins** (no ASOF, no
+   range joins): `LAG`/`LEAD` window functions partitioned by county for history features and the target, a join to
+   `ref.county`, and one `LEFT JOIN` to the pivoted FRED table on `decision_date = available_month`. Put a comment
+   above every join stating the grain of both sides and of the result. Add a test that row counts are unchanged
+   after each join. Write the simple **leakage check** (no feature uses a row dated after the prediction month)
+   and make it pass before moving on.
 6. **Wrap-up.** `monthly_pipeline` parent flow, `.github/workflows/monthly.yml`, README (setup, secrets, run,
    schedule, scope and limitations), short data dictionary, the **panel summary** in BUILD_LOG, full-state run,
    full test run.
+
+## Simplicity rules (the user must be able to explain every file in a job interview)
+
+These override anything more complex in `CLAUDE.md`.
+- Plain SQL files and short, single-purpose Python functions. No classes, no clever abstractions.
+- Each file under about 120 lines, with clear names and a plain-English comment at the top: what it does, what goes
+  in, what comes out. A short comment above each non-obvious SQL expression.
+- No snapshot retention or pruning, no DB-size warnings, no custom config loader (`yaml.safe_load` only), and a
+  small number of focused tests.
+- Keep the interview story: raw/staging/marts layers, point-in-time correctness, the target definition (a 3-month
+  change in percentage points), and idempotent monthly runs.
+- Maintain `docs/WALKTHROUGH.md`: for every file, 3 to 5 plain-English sentences on what it does and why; a short
+  description of each join (what one row is on each side, the key, what would go wrong without it); and 2 to 3
+  likely interview questions with short answers. Update it at the end of every phase.
 
 ## Stages 2–5 — ML notebooks
 
