@@ -9,7 +9,7 @@ Resume point for the staged build. Times are UTC wall clock.
 ### Checklist
 
 - [x] Phase 0 — Scaffold + preflight
-- [ ] Phase 1 — LAUS ingest -> raw
+- [x] Phase 1 — LAUS ingest -> raw
 - [ ] Phase 2 — LAUS staging + tests
 - [ ] Phase 3 — County reference + month spine + geography gaps
 - [ ] Phase 4 — FRED
@@ -25,3 +25,31 @@ Resume point for the staged build. Times are UTC wall clock.
   contact User-Agent. `PREFECT_API_KEY` / `PREFECT_API_URL` not set -> warning only; flows run locally (ephemeral Prefect).
 - Integration tests are auto-skipped if `MOTHERDUCK_TOKEN` is absent (conftest).
 - Elapsed at end of phase 0: ~6 min.
+
+### Phase 1 — LAUS ingest -> raw
+
+Verified facts (from `la.txt`, `la.series`, `la.measure`, `la.period`, `la.footnote`, and real rows, 2026-10-20):
+- County series ID = `LA` + seasonal `U` + area_code `CN` + 5-digit county FIPS + `00000000` + 2-digit measure,
+  e.g. `LAUCN540010000000003` (20 chars). FIPS = chars 6-10; state FIPS = chars 6-7; measure = last 2.
+- Measures confirmed: 03 unemployment rate, 04 unemployment, 05 employment, 06 labor force (07-09 exist but not for county files we use).
+- `M01`-`M12` months, `M13` annual average (kept in raw, excluded in staging). All county series are `U` (not seasonally adjusted).
+- Data file is tab-delimited, fixed-width padded, CRLF line endings, header row. `la.data.64.County` = 337 MB.
+- Missing value marker is `-` with footnote `X`. In the 2026-10-20 file it occurs only for **2025 M10** in every county:
+  footnote G says October 2025 data were not collected due to the federal government shutdown.
+- Footnote `P` (preliminary) appears on the latest month (2026 M08). Footnote codes kept.
+- Latest county month in the file: 2026 M08 for nearly all counties; 3 counties (Los Angeles CA, DC, Miami-Dade FL) already have 2026 M09
+  (they double as sub-state areas with earlier releases).
+- `la.series` lists 78 Puerto Rico (72) county-equivalents; excluded because the spec's state table is 50 states + DC.
+- Connecticut is already published as 9 planning regions (FIPS 09110-09190) back to 1990, so no CT discontinuity inside our window.
+- Alaska: Valdez-Cordova (02261) ends 2019; Chugach (02063) and Copper River (02066) start 2020 -> geography gap (handled in phase 3).
+
+Implementation:
+- `src/ingest/laus.py` (`ingest_laus` flow): stream file to a temp file (deleted in `finally`), filter in DuckDB (`read_csv` all varchar,
+  county series, requested states, measures 03-06, `year >= laus_min_year` = 2012), single `INSERT ... SELECT` into `raw.laus_county`.
+- Idempotency: same-day rerun deletes that day's snapshot rows **for the loaded states only**, then inserts (one transaction);
+  retention pruning keeps the latest `raw_snapshot_retention` snapshot dates.
+- Smoke test WV/VA/OH: 209,760 rows (276 counties x 4 measures x 190 periods). Full run: 2,388,276 rows, 12,576 series (3,144 counties), 51 states.
+  Rerunning WV on the same day left the total unchanged (idempotent). Full download+load ~25 s.
+- Deviation: Prefect 3.8.8's local ephemeral server fails to import with fastapi 0.156 (`Body(min_items=...)` removed);
+  pinned `fastapi>=0.139,<0.150` (resolved 0.149.0).
+- Elapsed at end of phase 1: ~7 min.
