@@ -45,6 +45,19 @@ result into `raw.laus_county` in a single statement, then deletes the temp file.
 exactly what BLS published; typing happens in staging. Each load is stamped with `_snapshot_date`; rerunning on the same
 day first deletes that day's snapshot, so reruns never create duplicates.
 
+### Staging layer
+
+**`sql/staging/laus_county_month.sql`** — Turns raw LAUS text into one clean row per county per month. It reads only
+the latest snapshot, drops the annual average (`M13`), converts `'M04'` + `'2020'` into the date 2020-04-01, turns the
+BLS missing marker `-` into NULL, and pivots the four measures into columns. It also adds `available_date` (month + 2):
+the earliest month this number could have been known, which is what point-in-time correctness is built on.
+
+**`tests/unit/test_laus_staging.py`** — Runs the real staging SQL on three fake rows in an in-memory DuckDB, so the
+parsing rules (leading-zero FIPS, month dates, M13 dropped, `-` -> NULL, release lag) are tested without the warehouse.
+
+**`tests/integration/test_warehouse.py`** — SQL assertions on the live tables: unique grain for every table, 5-character
+FIPS, rates between 0 and 100, labor force >= employed, and NULL rates only in the October 2025 shutdown month.
+
 ## Interview questions
 
 **Q: Why a separate preflight script?** A: Loads take minutes; a bad token should fail in seconds with a clear
@@ -58,3 +71,7 @@ can be fixed by rebuilding staging. Snapshot dates build a history of what BLS p
 
 **Q: What makes the ingest idempotent?** A: Before inserting, it deletes rows with today's `_snapshot_date` inside one
 transaction, so running twice on the same day leaves exactly one copy.
+
+**Q: How do you handle the October 2025 gap?** A: BLS did not collect October 2025 data (government shutdown), and marks it
+with `-`. Staging keeps the row with a NULL rate rather than inventing a value; features and targets that need that month
+are NULL too, and the model stage decides how to treat them.

@@ -15,7 +15,7 @@ before reuse (noted per phase).
 
 - [x] Phase 0 — Scaffold + preflight
 - [x] Phase 1 — LAUS ingest -> raw
-- [ ] Phase 2 — LAUS staging + tests
+- [x] Phase 2 — LAUS staging + tests
 - [ ] Phase 3 — County reference + month spine + geography gaps
 - [ ] Phase 4 — FRED
 - [ ] Phase 5 — Panel + target + leakage check
@@ -53,3 +53,16 @@ Verified facts (re-checked 2026-10-20 from `la.txt`, `la.series`, `la.measure`, 
   (simplest rule; a smoke run must therefore be followed by a full run on the same day).
 - Deviation: the earlier build's raw table (same columns) was reused; its same-day snapshot was replaced.
 - Elapsed at end of phase 1: ~6 min.
+
+### Phase 2 — LAUS staging + tests
+
+- `sql/staging/laus_county_month.sql` -> `staging.laus_county_month`: 553,075 rows, 3,144 counties, 2012-01..2026-09.
+  Latest snapshot only; `M13` excluded; `month` = first of month; measures pivoted to columns; `-` -> NULL via
+  `CAST(nullif(value, '-') AS DOUBLE)` (any other non-number fails loudly); footnotes kept; `available_date = month + 2 months`.
+- Months 2026-07 and 2026-08 have 3,143 counties; 2026-09 has only 3 (Los Angeles CA, DC, Miami-Dade FL publish early
+  as sub-state areas). Handled in phase 3 (spine end) — not dropped here.
+- Only NULL rates: 2025-10 for all 3,143 active counties (BLS footnote X, shutdown). Kept as NULL; documented.
+- SQL files use `{name}` placeholders filled from config by `run_sql_file` (plain `str.format`).
+- Tests: unit `test_laus_staging_parsing` (FIPS keeps leading zero, month parsing, M13 dropped, `-` -> NULL, lag);
+  integration unique grain (raw, staging), 5-char FIPS, rate in [0, 100], labor force >= employed, NULLs only in 2025-10. 5 passed.
+- Elapsed at end of phase 2: ~7 min.
