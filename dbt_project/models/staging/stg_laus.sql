@@ -34,6 +34,15 @@ wide as (
     group by county_fips, month
 ),
 
+-- one row per month that is published for >= 90% of counties. BLS releases a few big counties (e.g. Los Angeles,
+-- Miami-Dade, DC) a month early; without this cap the "newest month" would hold only those few counties.
+complete_months as (
+    select month
+    from wide
+    group by month
+    having count(*) >= 0.9 * (select count(distinct county_fips) from wide)
+),
+
 -- one row per county (area_type F = county); text looks like "Autauga County, AL"
 area as (
     select
@@ -61,3 +70,4 @@ select
 from wide
 left join area on wide.county_fips = area.county_fips
 where left(wide.county_fips, 2) not in ('72', '78')
+  and wide.month <= (select max(month) from complete_months)
