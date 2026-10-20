@@ -6,6 +6,7 @@ sources:
     tables:
       - name: laus_vintages
       - name: laus_area
+      - name: fred_vintages
 
 models:
   - name: county_month

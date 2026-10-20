@@ -1,4 +1,4 @@
--- stg_laus (county x month) -> county_month: LAUS history features (lag/trailing only) + 3-month-ahead target.
+-- stg_laus (county x month) + stg_fred (available month) -> county_month: LAUS + FRED features, 3-month-ahead target.
 with base as (
     select
         *,
@@ -47,9 +47,17 @@ select
     cos(2 * pi() * month(month) / 12)                                       as f_month_cos,
     f_nat_med_chg_3m,
     f_state_med_chg_3m,
+    fred.fred_latest_ref_month,
+    fred.f_fred_unrate, fred.f_fred_unrate_chg_3m, fred.f_fred_fedfunds, fred.f_fred_fedfunds_chg_6m,
+    fred.f_fred_cpi_yoy_pct, fred.f_fred_t10y2y_mean, fred.f_fred_indpro_yoy_pct,
+    fred.f_fred_payems_pct_chg_3m, fred.f_fred_icsa_pct_chg_3m,
     y_delta_3m,
     y_delta_3m >= {{ var('threshold_pp') }}                                 as y_label,
     y_delta_3m is not null                                                  as is_labeled,
     labor_force
-from with_medians
+from with_medians as laus
+-- THE join: laus (one row per county x month) LEFT JOIN fred (one row per available_month) on
+-- decision_date = available_month (equality only). Result: still one row per county x month.
+left join {{ ref('stg_fred') }} as fred
+    on cast(laus.month + interval {{ var('laus_lag_months') }} month as date) = fred.available_month
 where month >= date '{{ var("panel_start") }}'
