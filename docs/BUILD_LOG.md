@@ -18,7 +18,7 @@ before reuse (noted per phase).
 - [x] Phase 2 — LAUS staging + tests
 - [x] Phase 3 — County reference + month spine + geography gaps
 - [x] Phase 4 — FRED
-- [ ] Phase 5 — Panel + target + leakage check
+- [x] Phase 5 — Panel + target + leakage check
 - [ ] Phase 6 — Wrap-up
 
 ### Phase 0 — Scaffold + preflight
@@ -105,3 +105,28 @@ Verified facts (re-checked 2026-10-20 from `la.txt`, `la.series`, `la.measure`, 
   of CLAUDE.md section 11, plus `fred_latest_ref_month` for the leakage check.
 - Tests: unique grain on the three FRED tables, 7 series, consecutive months per series. 15 passed.
 - Elapsed at end of phase 4: ~12 min.
+
+### Phase 5 — Panel + target + leakage check
+
+- `sql/marts/county_month_panel.sql` -> `marts.county_month_panel`: 439,740 rows = 3,141 counties x 140 months (2015-01..2026-08).
+  **Equality joins only** (simplicity rules; replaces the ASOF JOIN of CLAUDE.md section 10.2): staging JOIN `ref.county` on
+  `county_fips`, and one LEFT JOIN to `staging.fred_by_available_month` on `decision_date = available_month`. Exclusions and the
+  spine end are `WHERE ... IN (subquery)` / scalar-subquery filters, not joins. A grain comment sits above every join.
+- History features via `LAG` and trailing `ROWS BETWEEN k PRECEDING AND CURRENT ROW` windows per county (computed on 2012+ history,
+  then filtered to `panel_start`); target via `LEAD(rate, 3)`. Cross-county context = window medians `PARTITION BY month`
+  and `PARTITION BY state_fips, month` (same month t only, so no future data and no extra join).
+- Target: `y_delta_3m = round(rate_{t+3} - rate_t, 1)` (percentage points), `y_label = 1` if `>= 0.5`, NULL when the target is unknown.
+- `decision_date = month + 2 months`; prediction assumed made at the end of that month (after the LAUS release early in the month
+  and the FRED releases implied by the lags).
+- Rate changes rounded to 1 decimal (inputs are published to 1 decimal; removes float noise).
+- Tests (22 passed): unit `test_target_is_rounded_pp_change`; unit **leakage perturbation** `test_no_feature_uses_future_data`
+  (runs the real FRED + panel SQL on synthetic data, scrambles LAUS after t and FRED rows not yet available at d_t, asserts
+  all features at t identical and that the target did change). Mutation-checked: joining FRED one month later, or a
+  12-month window reaching 1 month ahead, both make it fail. Integration: panel unique grain, row count unchanged after each
+  join, panel = included counties x months, panel counties in ref.county, leakage dates (`month < decision_date` and
+  `fred_latest_ref_month < decision_date` on every row), no NULLs outside documented windows.
+- Documented NULL windows: 2025-10 (no BLS county data, no UNRATE/CPI) makes rate-based features NULL at 2025-10 and for
+  lags that reach it (e.g. 3-month changes at 2026-01), targets NULL for 2025-07 and 2025-10, FRED UNRATE NULL for
+  decision month 2025-11; the last 3 months (2026-06..08) have NULL targets (kept for live scoring). Trailing mean/std/min
+  skip the single NULL month.
+- Elapsed at end of phase 5: ~16 min.

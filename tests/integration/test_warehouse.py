@@ -17,6 +17,7 @@ GRAINS = {
     "raw.fred_observations": "series_id, date, _snapshot_date",
     "staging.fred_monthly": "series_id, ref_month",
     "staging.fred_by_available_month": "available_month",
+    "marts.county_month_panel": "county_fips, month",
 }
 
 
@@ -61,3 +62,48 @@ def test_fred_months_are_consecutive(con):
         HAVING count(*) <> date_diff('month', min(ref_month), max(ref_month)) + 1""").fetchall()
     assert broken == []
     assert con.execute("SELECT count(DISTINCT series_id) FROM staging.fred_monthly").fetchone()[0] == 7
+
+
+def test_panel_joins_keep_row_counts(con):
+    # join 1: staging x ref.county must not add or drop rows (every staging county is in ref.county exactly once)
+    staging_rows = con.execute("SELECT count(*) FROM staging.laus_county_month").fetchone()[0]
+    joined_rows = con.execute("""SELECT count(*) FROM staging.laus_county_month l
+        JOIN ref.county c ON c.county_fips = l.county_fips""").fetchone()[0]
+    assert joined_rows == staging_rows
+    # join 2: panel x FRED on decision_date = available_month must not duplicate rows
+    panel_rows = con.execute("SELECT count(*) FROM marts.county_month_panel").fetchone()[0]
+    with_fred = con.execute("""SELECT count(*) FROM marts.county_month_panel p
+        LEFT JOIN staging.fred_by_available_month f ON f.available_month = p.decision_date""").fetchone()[0]
+    assert with_fred == panel_rows
+    # overall: panel = included counties x panel months (no row lost or invented)
+    counties, months = con.execute("SELECT count(DISTINCT county_fips), count(DISTINCT month) "
+                                   "FROM marts.county_month_panel").fetchone()
+    assert panel_rows == counties * months
+    included = con.execute("SELECT count(*) FROM ref.geography_gap_report WHERE status = 'ok'").fetchone()[0]
+    assert counties == included
+
+
+def test_panel_counties_in_reference(con):
+    orphans = con.execute("""SELECT count(*) FROM marts.county_month_panel
+        WHERE county_fips NOT IN (SELECT county_fips FROM ref.county)""").fetchone()[0]
+    assert orphans == 0
+
+
+def test_leakage_dates(con):
+    # simplest leakage check: no row feeding a feature is dated at or after the decision (prediction) month
+    bad = con.execute("""SELECT count(*) FROM marts.county_month_panel
+        WHERE month >= decision_date OR fred_latest_ref_month >= decision_date
+           OR fred_latest_ref_month IS NULL""").fetchone()[0]
+    assert bad == 0
+
+
+def test_no_unexplained_nulls(con):
+    # NULLs are expected only near the October 2025 shutdown month (no BLS/FRED data) and in the last 3 months'
+    # target. Outside those documented windows every column must be filled.
+    columns = [r[0] for r in con.execute("DESCRIBE marts.county_month_panel").fetchall()]
+    null_checks = " OR ".join(f'"{c}" IS NULL' for c in columns)
+    bad = con.execute(f"""SELECT count(*) FROM marts.county_month_panel
+        WHERE month NOT BETWEEN DATE '2025-07-01' AND DATE '2026-10-01'
+          AND month <= (SELECT max(month) - INTERVAL 3 MONTH FROM marts.county_month_panel)
+          AND ({null_checks})""").fetchone()[0]
+    assert bad == 0

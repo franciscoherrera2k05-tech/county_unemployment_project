@@ -92,6 +92,22 @@ first and last month, and labels it `ok`, `appears late`, `disappears early`, `i
 The October 2025 shutdown month is ignored because it is missing for everyone. Counties not `ok` (6 in Alaska, due to
 census-area splits) are excluded from the panel, and the report quantifies what that costs.
 
+### Marts layer
+
+**`sql/marts/county_month_panel.sql`** — Builds the modeling table: one row per county per month from 2015. It first keeps
+the counties that passed the geography check and adds state and name from `ref.county`. Window functions then compute each
+county's history (changes over 1-12 months, trailing 12-month mean/std, distance from the 36-month low, labor force and
+employment changes) using only that county's earlier rows, plus the target: the rate 3 months later minus today's rate,
+rounded to 1 decimal, and a label for "rose by at least 0.5 points". Finally it attaches the national FRED features known
+in the decision month (t + 2) with one LEFT JOIN.
+
+**`src/flows/build_panel.py`** — The `build_panel` flow: runs the panel SQL and prints rows, counties and the month range.
+
+**`tests/unit/test_panel_leakage.py`** — Runs the real FRED and panel SQL on three synthetic counties. One test checks the
+target is the rounded percentage-point change compared with the threshold. The leakage test builds the panel, scrambles
+every LAUS value after month t and every FRED value not yet published at the decision date, rebuilds, and asserts every
+feature at t is identical (while the target, which looks ahead by design, changes).
+
 **`src/flows/build_staging.py`** — The `build_staging` flow: runs the staging and reference SQL files in a fixed order and
 prints each table's row count. Each file is one `CREATE OR REPLACE TABLE`, so the flow can be rerun safely.
 
@@ -112,6 +128,19 @@ what we want to count. An inner join would hide the gaps we're looking for.
 **staging.fred_monthly: complete_months JOIN lags ON series_id.** Left: one row per series x month. Right: one row per
 series (the lag table from config, 7 rows). Many-to-one, so still one row per series x month. Without it there would be no
 available_month; as an inner join it also drops any series not listed in the config.
+
+**panel: staging.laus_county_month JOIN ref.county ON county_fips.** Left: one row per county x month. Right: one row per
+county. Many-to-one, so the row count is unchanged (a test re-runs the join and compares counts). It adds state abbreviation
+and county name; if ref.county had a duplicate FIPS this join would double that county's rows, which the test would catch.
+
+**panel: with_context LEFT JOIN staging.fred_by_available_month ON decision_date = available_month.** Left: one row per
+county x month. Right: one row per month in which FRED values became known. Many-to-one, so still one row per county x month
+(tested). The key is the *decision* month, not the reference month, which is what makes it point-in-time: a same-month join
+on `month` would attach national numbers published after the prediction. LEFT keeps rows even if FRED is missing.
+
+**Window functions instead of self-joins.** `LAG(rate, 3) OVER (PARTITION BY county_fips ORDER BY month)` reads the same county's
+row 3 months earlier. This works because every included county has exactly one row for every month (checked by the gap report
+and the row-count test); `LEAD(rate, 3)` gives the target the same way.
 
 ## Interview questions
 
@@ -144,3 +173,14 @@ The lags are conservative (CPI and industrial production: 2 months, others: 1).
 
 **Q: What doesn't the FRED rule handle?** A: Revisions. FRED serves today's revised numbers (e.g. payrolls get revised),
 not what was first published. Using initial releases (ALFRED vintages) would fix that; it is listed as a limitation.
+
+**Q: Define the target precisely.** A: `y_delta_3m = round(rate(t+3) - rate(t), 1)`, a change in percentage points (5.0% -> 5.6%
+is +0.6), and `y_label = 1` when it is at least 0.5. It is not a level ("rate above X") and not a percent change.
+
+**Q: How do you prove there's no leakage?** A: Two ways. A test changes every future LAUS value and every not-yet-published FRED
+value, rebuilds the panel, and checks the features at t are byte-for-byte identical. And on the real table, every row's
+newest input (LAUS month t and the newest FRED reference month) is dated before its decision month.
+
+**Q: Why is decision_date t + 2?** A: BLS publishes county data for month t early in month t+2 (August 2026 data were in the
+file in October 2026). We can't predict from data we don't have yet, so the prediction is made in t+2 and the 3-month target
+window (t+1..t+3) is partly in the past by then: the real lead time is about one month.
