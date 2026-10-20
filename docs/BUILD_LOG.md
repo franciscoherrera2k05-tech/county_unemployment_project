@@ -19,7 +19,7 @@ before reuse (noted per phase).
 - [x] Phase 3 — County reference + month spine + geography gaps
 - [x] Phase 4 — FRED
 - [x] Phase 5 — Panel + target + leakage check
-- [ ] Phase 6 — Wrap-up
+- [x] Phase 6 — Wrap-up
 
 ### Phase 0 — Scaffold + preflight
 
@@ -130,3 +130,86 @@ Verified facts (re-checked 2026-10-20 from `la.txt`, `la.series`, `la.measure`, 
   decision month 2025-11; the last 3 months (2026-06..08) have NULL targets (kept for live scoring). Trailing mean/std/min
   skip the single NULL month.
 - Elapsed at end of phase 5: ~16 min.
+
+### Phase 6 — Wrap-up
+
+- `src/flows/monthly_pipeline.py`: ingest_laus -> ingest_fips -> ingest_fred -> build_staging -> build_panel -> `pytest -q`
+  (non-zero exit fails the flow) -> row count per table. **Full-state run end to end: ~42 s**, 22 tests passed inside the flow;
+  row counts identical to the previous same-day runs (idempotent).
+- `.github/workflows/monthly.yml`: cron `0 14 28 * *` + `workflow_dispatch`, `astral-sh/setup-uv`, `uv sync --locked`, preflight,
+  then the pipeline; secrets from `${{ secrets.* }}`. Not executed on GitHub (no push); locally verified `uv sync --locked`
+  and that Prefect runs with empty `PREFECT_API_*` variables (what Actions passes when those secrets are absent).
+- Release timing (verified 2026-10-20 on bls.gov schedules): Metropolitan Area release for Oct 2026 on Dec 2, 2026 and for
+  Nov 2026 on Dec 30, 2026; State release for Oct 2026 on Nov 20, 2026. The live file had county data through Aug 2026 on
+  Oct 20, consistent with county data arriving with the metro release (~t+2). Lag 2 kept; cron day 28 kept.
+  Not verified: that county rows appear in the LAUS flat files on the exact metro release day.
+- README (setup, secrets, run, schedule, point-in-time rules, scope and limitations), `docs/data_dictionary.md`,
+  `scripts/panel_summary.py`. No scope-cut ladder items were needed.
+- Final `uv run pytest`: 22 passed (5 unit incl. leakage perturbation and target tests, 17 integration) in ~1.4 s.
+- Elapsed at end of phase 6: ~16 min. **Total Stage 1 elapsed (restart): ~16 min** (21:51:05 -> ~22:07 UTC).
+
+### Panel summary (descriptive only, 2026-10-20 snapshot, default threshold 0.5 pp)
+
+- Rows: 439,740; counties: 3,141; months: 2015-01-01 to 2026-08-01
+- Excluded for geography: 3 of 3,144 counties with data (0.095%), 0.0062% of summed average labor force; plus 3 reference counties with no data
+- Positive-label rate (y_delta_3m >= 0.5 pp): 27.0% of 424,035 labeled rows
+
+| Year | Labeled rows | Positive rate |
+|---|---|---|
+| 2015 | 37,692 | 25.5% |
+| 2016 | 37,692 | 24.2% |
+| 2017 | 37,692 | 23.7% |
+| 2018 | 37,692 | 27.3% |
+| 2019 | 37,692 | 31.3% |
+| 2020 | 37,692 | 37.1% |
+| 2021 | 37,692 | 17.1% |
+| 2022 | 37,692 | 27.2% |
+| 2023 | 37,692 | 28.9% |
+| 2024 | 37,692 | 31.0% |
+| 2025 | 31,410 | 26.0% |
+| 2026 | 15,705 | 21.9% |
+
+| Column | Missing rows | Missing % |
+|---|---|---|
+| rate | 3,141 | 0.71% |
+| unemployed | 3,141 | 0.71% |
+| employed | 3,141 | 0.71% |
+| labor_force | 3,141 | 0.71% |
+| rate_change_1m | 6,282 | 1.43% |
+| rate_change_3m | 6,282 | 1.43% |
+| rate_change_6m | 6,282 | 1.43% |
+| rate_change_12m | 3,141 | 0.71% |
+| rate_minus_min_36m | 3,141 | 0.71% |
+| labor_force_pct_change_3m | 6,282 | 1.43% |
+| labor_force_pct_change_12m | 3,141 | 0.71% |
+| employed_pct_change_3m | 6,282 | 1.43% |
+| employed_pct_change_12m | 3,141 | 0.71% |
+| unemployed_pct_change_3m | 6,282 | 1.43% |
+| y_delta_3m | 15,705 | 3.57% |
+| national_median_change_3m | 6,282 | 1.43% |
+| state_median_change_3m | 6,282 | 1.43% |
+| y_label | 15,705 | 3.57% |
+| fred_unrate | 3,141 | 0.71% |
+| fred_unrate_change_3m | 6,282 | 1.43% |
+| fred_cpi_yoy_pct | 3,141 | 0.71% |
+
+(Columns not listed have no missing values.)
+
+Positive-label rate by calendar month of t (strong seasonality from unadjusted county rates): Jan 9.4%, Feb 9.8%, Mar 27.5%,
+Apr 51.2%, May 30.4%, Jun 1.5%, Jul 2.2%, Aug 6.4%, Sep 24.4%, Oct 63.1%, Nov 59.8%, Dec 40.0%. COVID: t = 2019-12..2020-03 are
+92.3%, 96.5%, 97.3%, 87.5% positive; t = 2020-04..06 are 9.2%, 1.1%, 0.3%.
+The 2025 and 2026 labeled-row counts are lower because of the 2025-10 gap and the unlabeled final 3 months.
+
+### Deviations from CLAUDE.md (all from the simplicity rules)
+
+- FRED: fixed per-series lag (`available_month = ref_month + lag`), no `output_type=4`; equality join instead of ASOF JOIN.
+- Config: no `storage` block, no `fred_use_initial_release`, `fred_fallback_lag_months` renamed `fred_lag_months`.
+- No raw snapshot retention/pruning and no `PRAGMA database_size` logging/warnings.
+- Extra tables not in section 9: `raw.laus_area`, `ref.state`, `ref.geography_gap_report`, `staging.fred_by_available_month`.
+- Same-day raw replacement deletes the whole day's snapshot (not per state).
+
+### Limitations / unverified
+
+- Revised vintages only (LAUS and FRED); real vintage history starts at the first snapshot (2026-10-20).
+- The GitHub Actions workflow has not been run on GitHub.
+- Prefect Cloud not configured (no `PREFECT_API_*`); flows ran on Prefect's temporary local server.

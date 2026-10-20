@@ -111,6 +111,23 @@ feature at t is identical (while the target, which looks ahead by design, change
 **`src/flows/build_staging.py`** — The `build_staging` flow: runs the staging and reference SQL files in a fixed order and
 prints each table's row count. Each file is one `CREATE OR REPLACE TABLE`, so the flow can be rerun safely.
 
+### Orchestration, schedule and docs
+
+**`src/flows/monthly_pipeline.py`** — The parent Prefect flow: runs the three ingests, `build_staging` and `build_panel` in
+order, then the whole test suite, and prints every table's row count. If any data test fails the flow fails, so bad data is
+never silently published. GitHub Actions runs exactly this module each month.
+
+**`.github/workflows/monthly.yml`** — The schedule: on the 28th of each month at 14:00 UTC (or by hand) GitHub installs uv,
+syncs the locked dependencies, runs preflight, and runs the pipeline. Secrets come from repository secrets, never from the
+file. The 28th falls after BLS's usual early-month county release.
+
+**`scripts/panel_summary.py`** — Prints a descriptive summary of the panel for the build log: size, date range, excluded
+counties and labor force, positive-label rate overall and by year, and missing values per column. No modeling.
+
+**`README.md` / `docs/data_dictionary.md` / `docs/BUILD_LOG.md`** — The README covers setup, secrets, running, the schedule,
+the point-in-time rules and the scope and limitations. The data dictionary defines every panel column, the target, the FRED
+lags and the known data issues (COVID, seasonality, October 2025). The build log records what was verified, when, and how.
+
 ## Joins
 
 **ref.county: counties JOIN ref.state ON state_fips.** Left: one row per county area from BLS (3,225, incl. Puerto Rico).
@@ -181,6 +198,13 @@ is +0.6), and `y_label = 1` when it is at least 0.5. It is not a level ("rate ab
 value, rebuilds the panel, and checks the features at t are byte-for-byte identical. And on the real table, every row's
 newest input (LAUS month t and the newest FRED reference month) is dated before its decision month.
 
-**Q: Why is decision_date t + 2?** A: BLS publishes county data for month t early in month t+2 (August 2026 data were in the
-file in October 2026). We can't predict from data we don't have yet, so the prediction is made in t+2 and the 3-month target
-window (t+1..t+3) is partly in the past by then: the real lead time is about one month.
+**Q: Why is decision_date t + 2?** A: BLS publishes county data for month t early in month t+2 (e.g. October 2026 data on
+Dec 2, 2026). We can't predict from data we don't have yet, so the prediction is made in t+2. The outcome month t+3 is itself
+only published in t+5, so the warning comes about 3 months before official data would confirm the rise.
+
+**Q: What happens if the monthly run fails halfway?** A: Every step is safe to rerun: raw loads replace the same day's
+snapshot and every staging/mart table is `CREATE OR REPLACE`. You fix the cause and run the pipeline again.
+
+**Q: Why is the positive rate 27%, and so seasonal?** A: County rates are not seasonally adjusted, so many counties rise by
+0.5 points every winter (63% of October rows are positive vs. 2% of June rows). That's why month-of-year features exist, and
+why models must be judged against a seasonal baseline, not just "always predict 0".
