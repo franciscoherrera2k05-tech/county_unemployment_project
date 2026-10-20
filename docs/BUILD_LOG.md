@@ -10,7 +10,7 @@ Resume point for the staged build. Times are UTC wall clock.
 
 - [x] Phase 0 — Scaffold + preflight
 - [x] Phase 1 — LAUS ingest -> raw
-- [ ] Phase 2 — LAUS staging + tests
+- [x] Phase 2 — LAUS staging + tests
 - [ ] Phase 3 — County reference + month spine + geography gaps
 - [ ] Phase 4 — FRED
 - [ ] Phase 5 — Panel + target + leakage test
@@ -53,3 +53,15 @@ Implementation:
 - Deviation: Prefect 3.8.8's local ephemeral server fails to import with fastapi 0.156 (`Body(min_items=...)` removed);
   pinned `fastapi>=0.139,<0.150` (resolved 0.149.0).
 - Elapsed at end of phase 1: ~7 min.
+
+### Phase 2 — LAUS staging + tests
+
+- `sql/staging/laus_county_month.sql` -> `staging.laus_county_month` (553,075 rows). Latest snapshot **per series** (so a later
+  partial smoke snapshot never hides other states). Pivots measures 03-06; `month` = first of month from `M01`-`M12`; `M13` excluded;
+  `-` -> NULL with `is_missing_marker`; footnotes kept as a sorted comma list; `is_preliminary` from footnote `P`;
+  `available_date = month + laus_release_lag_months` (2).
+- SQL files are rendered with config parameters by `src/utils/sql.py` (no hardcoded thresholds/dates).
+- Tests: unit (FIPS padding, month parsing, M13 exclusion, missing marker, preliminary flag, lag, latest snapshot) and
+  integration (raw/staging grain, 5-char FIPS, rate in [0,100], available_date > month, nulls only where marker, LF >= employment,
+  nulls only in 2025-10). 10 passed.
+- Elapsed at end of phase 2: ~8 min.
