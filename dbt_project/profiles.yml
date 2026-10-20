@@ -1,0 +1,9 @@
+# Reads MOTHERDUCK_TOKEN from the environment (never stored here).
+unemployment:
+  target: prod
+  outputs:
+    prod:
+      type: duckdb
+      path: "md:unemployment"
+      schema: marts   # all dbt tables land in unemployment.marts
+      threads: 4

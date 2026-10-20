@@ -1,0 +1,14 @@
+version: 2
+
+sources:
+  - name: raw
+    schema: raw
+    tables:
+      - name: laus_vintages
+      - name: laus_area
+
+models:
+  - name: county_month
+    columns:
+      - name: county_month_id
+        tests: [unique, not_null]

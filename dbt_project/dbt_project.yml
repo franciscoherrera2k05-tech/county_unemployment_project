@@ -1,0 +1,12 @@
+name: unemployment
+version: "1.0"
+profile: unemployment
+model-paths: ["models"]
+test-paths: ["tests"]
+vars:
+  laus_lag_months: 2
+  threshold_pp: 0.5
+  panel_start: "2015-01-01"
+models:
+  unemployment:
+    +materialized: table
