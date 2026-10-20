@@ -1,0 +1,21 @@
+[project]
+name = "county-unemployment"
+version = "0.1.0"
+description = "County unemployment early-warning system: monthly LAUS/FRED pipeline on MotherDuck + ML study"
+requires-python = ">=3.12"
+dependencies = [
+    "duckdb>=1.5.6",
+    "prefect>=3.8.8",
+    "pytest>=9.1.1",
+    "python-dotenv>=1.2.4",
+    "pyyaml>=6.0.3",
+    "requests>=2.34.2",
+]
+
+[tool.uv]
+package = false
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
+markers = ["integration: tests that query the live MotherDuck warehouse"]
