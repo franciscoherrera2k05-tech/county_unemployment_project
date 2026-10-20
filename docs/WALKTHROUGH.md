@@ -45,6 +45,10 @@ result into `raw.laus_county` in a single statement, then deletes the temp file.
 exactly what BLS published; typing happens in staging. Each load is stamped with `_snapshot_date`; rerunning on the same
 day first deletes that day's snapshot, so reruns never create duplicates.
 
+**`src/ingest/fips.py`** — The `ingest_fips` flow. It downloads BLS's small area list (`la.area`: every area code and
+name) into `raw.laus_area`, with the same same-day replacement rule as LAUS. It also writes `ref.state`, the 51 state FIPS
+codes and abbreviations kept in code. The county table itself is built in SQL from these two inputs.
+
 ### Staging layer
 
 **`sql/staging/laus_county_month.sql`** — Turns raw LAUS text into one clean row per county per month. It reads only
@@ -57,6 +61,39 @@ parsing rules (leading-zero FIPS, month dates, M13 dropped, `-` -> NULL, release
 
 **`tests/integration/test_warehouse.py`** — SQL assertions on the live tables: unique grain for every table, 5-character
 FIPS, rates between 0 and 100, labor force >= employed, and NULL rates only in the October 2025 shutdown month.
+
+### Reference layer
+
+**`sql/ref/county.sql`** — Builds `ref.county`, the county dimension: one row per 5-digit county FIPS with its state and
+name. It keeps only BLS area type `F` (counties and equivalents) and takes the FIPS from the area code. Joining to
+`ref.state` adds the state abbreviation and drops Puerto Rico, which is outside the 50 states + DC scope.
+
+**`sql/ref/month_spine.sql`** — Builds `ref.month_spine`: every county paired with every month from January 2012 to
+the latest published month, with no gaps. It is the "expected" grid we compare the real data against, so missing
+months become visible rows instead of silently absent ones. The end month is the newest month that most counties have
+published, so three early-reporting counties don't stretch it.
+
+**`sql/ref/geography_gap_report.sql`** — For each county, counts how many spine months actually have data, finds its
+first and last month, and labels it `ok`, `appears late`, `disappears early`, `internal gaps`, or `no data in window`.
+The October 2025 shutdown month is ignored because it is missing for everyone. Counties not `ok` (6 in Alaska, due to
+census-area splits) are excluded from the panel, and the report quantifies what that costs.
+
+**`src/flows/build_staging.py`** — The `build_staging` flow: runs the staging and reference SQL files in a fixed order and
+prints each table's row count. Each file is one `CREATE OR REPLACE TABLE`, so the flow can be rerun safely.
+
+## Joins
+
+**ref.county: counties JOIN ref.state ON state_fips.** Left: one row per county area from BLS (3,225, incl. Puerto Rico).
+Right: one row per state (51). Many counties to one state, so the result is still one row per county. Without it we'd have
+no state abbreviation; as an inner join it also removes Puerto Rico on purpose.
+
+**ref.month_spine: ref.county CROSS JOIN months.** Left: one row per county. Right: one row per month. Result: every
+county x month combination. Without it, a county that silently stops reporting would just have fewer rows and we
+wouldn't notice.
+
+**geography gap report: month_spine LEFT JOIN staging.laus_county_month ON (county_fips, month).** Both sides are one row
+per county x month, so the result is too. LEFT keeps spine rows with no data (they show up as NULL), which is exactly
+what we want to count. An inner join would hide the gaps we're looking for.
 
 ## Interview questions
 
@@ -75,3 +112,10 @@ transaction, so running twice on the same day leaves exactly one copy.
 **Q: How do you handle the October 2025 gap?** A: BLS did not collect October 2025 data (government shutdown), and marks it
 with `-`. Staging keeps the row with a NULL rate rather than inventing a value; features and targets that need that month
 are NULL too, and the model stage decides how to treat them.
+
+**Q: Why build a month spine instead of just looking at the data?** A: Missing data is invisible in the data itself.
+The spine says what *should* exist, and a LEFT JOIN against it turns each missing month into a countable NULL.
+
+**Q: Why exclude the Alaska counties rather than patch them?** A: Valdez-Cordova split into two new census areas in 2020,
+so no single FIPS has a continuous series. Stitching them would invent a geography; excluding them costs 3 counties
+(~0.006% of the labor force), which is documented in the gap report.

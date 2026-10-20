@@ -16,7 +16,7 @@ before reuse (noted per phase).
 - [x] Phase 0 — Scaffold + preflight
 - [x] Phase 1 — LAUS ingest -> raw
 - [x] Phase 2 — LAUS staging + tests
-- [ ] Phase 3 — County reference + month spine + geography gaps
+- [x] Phase 3 — County reference + month spine + geography gaps
 - [ ] Phase 4 — FRED
 - [ ] Phase 5 — Panel + target + leakage check
 - [ ] Phase 6 — Wrap-up
@@ -66,3 +66,26 @@ Verified facts (re-checked 2026-10-20 from `la.txt`, `la.series`, `la.measure`, 
 - Tests: unit `test_laus_staging_parsing` (FIPS keeps leading zero, month parsing, M13 dropped, `-` -> NULL, lag);
   integration unique grain (raw, staging), 5-char FIPS, rate in [0, 100], labor force >= employed, NULLs only in 2025-10. 5 passed.
 - Elapsed at end of phase 2: ~7 min.
+
+### Phase 3 — County reference + month spine + geography gaps
+
+- `ingest_fips` flow (`src/ingest/fips.py`): `la.area` -> `raw.laus_area` (8,351 rows, same-day snapshot replacement) and the
+  static 51-row `ref.state`. Verified `la.area_type`: `F` = "Counties and equivalents" (3,225 areas incl. 78 Puerto Rico).
+- `sql/ref/county.sql` -> `ref.county`: 3,147 counties, 51 states (inner join to `ref.state` drops Puerto Rico by design).
+  County name = `area_text` without the ", XX" suffix (DC has no suffix and is kept as "District of Columbia").
+- `sql/ref/month_spine.sql` -> `ref.month_spine`: 3,147 counties x 176 months (2012-01..2026-08) = 553,872 rows. Spine end =
+  newest month with rates for >= 50% of counties (2026-08); the 3 counties with 2026-09 do not extend it.
+- `sql/ref/geography_gap_report.sql` -> `ref.geography_gap_report` (one row per county, `status`). National gap months
+  (< 50% of counties have a rate) are ignored: only 2025-10 (shutdown, BLS footnote X/G).
+- **6 counties flagged, all Alaska** (same as the earlier build, re-verified):
+  - no data in window: 02201 Prince of Wales-Outer Ketchikan, 02232 Skagway-Hoonah-Angoon, 02280 Wrangell-Petersburg (discontinued pre-2012)
+  - disappears early: 02261 Valdez-Cordova (last month 2019-12)
+  - appears late: 02063 Chugach, 02066 Copper River (first month 2020-01; Valdez-Cordova split)
+- **Excluded share:** 3 of the 3,144 counties with data (0.095%); their average labor force ~10.1k of ~162.2M summed
+  average labor force (~0.006%). Excluded via `status <> 'ok'`; nothing dropped silently.
+- Connecticut already published as 9 planning regions back to 1990 and Virginia shows no appear/disappear in the window,
+  so neither creates a gap here.
+- `src/flows/build_staging.py` runs the SQL files in order and prints row counts.
+- Tests: unique grain on ref.state/ref.county/ref.month_spine/ref.geography_gap_report; 51 states; every staging county is in
+  ref.county; spine consecutive and rows = counties x months; gap report covers every county. 11 passed.
+- Elapsed at end of phase 3: ~10 min.

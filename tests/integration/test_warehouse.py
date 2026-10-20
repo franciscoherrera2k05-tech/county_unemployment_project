@@ -10,6 +10,10 @@ pytestmark = pytest.mark.integration
 GRAINS = {
     "raw.laus_county": "series_id, year, period, _snapshot_date",
     "staging.laus_county_month": "county_fips, month",
+    "ref.state": "state_fips",
+    "ref.county": "county_fips",
+    "ref.month_spine": "county_fips, month",
+    "ref.geography_gap_report": "county_fips",
 }
 
 
@@ -29,3 +33,20 @@ def test_laus_values_valid(con):
     other_nulls = con.execute("""SELECT count(*) FROM staging.laus_county_month
         WHERE unemployment_rate IS NULL AND month <> DATE '2025-10-01'""").fetchone()[0]
     assert other_nulls == 0
+
+
+def test_county_reference(con):
+    assert con.execute("SELECT count(DISTINCT state_fips) FROM ref.county").fetchone()[0] == 51
+    # every county in the LAUS data must exist in the reference table
+    orphans = con.execute("""SELECT count(*) FROM staging.laus_county_month
+        WHERE county_fips NOT IN (SELECT county_fips FROM ref.county)""").fetchone()[0]
+    assert orphans == 0
+
+
+def test_month_spine_has_no_gaps(con):
+    counties, months, rows, span = con.execute("""SELECT count(DISTINCT county_fips), count(DISTINCT month), count(*),
+        date_diff('month', min(month), max(month)) + 1 FROM ref.month_spine""").fetchone()
+    assert months == span                      # consecutive months
+    assert rows == counties * months           # every county has every month
+    report_rows = con.execute("SELECT count(*) FROM ref.geography_gap_report").fetchone()[0]
+    assert report_rows == counties             # every county gets a gap-report row
