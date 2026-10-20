@@ -14,6 +14,8 @@ SQL_FILES = [
     "ref/county.sql",
     "ref/month_spine.sql",
     "ref/geography_gap_report.sql",
+    "staging/fred_monthly.sql",
+    "staging/fred_by_available_month.sql",
 ]
 
 

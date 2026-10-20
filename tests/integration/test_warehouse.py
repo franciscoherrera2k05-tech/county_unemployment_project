@@ -14,6 +14,9 @@ GRAINS = {
     "ref.county": "county_fips",
     "ref.month_spine": "county_fips, month",
     "ref.geography_gap_report": "county_fips",
+    "raw.fred_observations": "series_id, date, _snapshot_date",
+    "staging.fred_monthly": "series_id, ref_month",
+    "staging.fred_by_available_month": "available_month",
 }
 
 
@@ -50,3 +53,11 @@ def test_month_spine_has_no_gaps(con):
     assert rows == counties * months           # every county has every month
     report_rows = con.execute("SELECT count(*) FROM ref.geography_gap_report").fetchone()[0]
     assert report_rows == counties             # every county gets a gap-report row
+
+
+def test_fred_months_are_consecutive(con):
+    # LAG(value, 3) means "3 months earlier" only if each series has no missing months
+    broken = con.execute("""SELECT series_id FROM staging.fred_monthly GROUP BY series_id
+        HAVING count(*) <> date_diff('month', min(ref_month), max(ref_month)) + 1""").fetchall()
+    assert broken == []
+    assert con.execute("SELECT count(DISTINCT series_id) FROM staging.fred_monthly").fetchone()[0] == 7

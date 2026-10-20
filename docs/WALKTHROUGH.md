@@ -49,6 +49,10 @@ day first deletes that day's snapshot, so reruns never create duplicates.
 name) into `raw.laus_area`, with the same same-day replacement rule as LAUS. It also writes `ref.state`, the 51 state FIPS
 codes and abbreviations kept in code. The county table itself is built in SQL from these two inputs.
 
+**`src/ingest/fred.py`** — The `ingest_fred` flow. It calls the FRED API once per series listed in the config, writes all
+observations to one temp CSV, and loads it into `raw.fred_observations` with one insert, replacing any snapshot from the
+same day. It starts one year before the LAUS history so year-over-year changes exist from the first month.
+
 ### Staging layer
 
 **`sql/staging/laus_county_month.sql`** — Turns raw LAUS text into one clean row per county per month. It reads only
@@ -61,6 +65,16 @@ parsing rules (leading-zero FIPS, month dates, M13 dropped, `-` -> NULL, release
 
 **`tests/integration/test_warehouse.py`** — SQL assertions on the live tables: unique grain for every table, 5-character
 FIPS, rates between 0 and 100, labor force >= employed, and NULL rates only in the October 2025 shutdown month.
+
+**`sql/staging/fred_monthly.sql`** — Turns raw FRED observations into one value per series per month. Daily (T10Y2Y) and
+weekly (ICSA) series are averaged over the month; the current month is dropped because it is not finished. It adds simple
+changes versus 3, 6 and 12 months earlier, and `available_month` = reference month + a fixed per-series lag from the config
+(e.g. September CPI counts as known in November). That one line is the whole FRED point-in-time rule.
+
+**`sql/staging/fred_by_available_month.sql`** — Pivots FRED to one row per `available_month` with one column per feature
+(UNRATE level and 3-month change, CPI year-over-year, and so on). Each row answers "what did we know about the national
+economy in this month?". Because lags differ, one row mixes reference months (September UNRATE, August CPI), and
+`fred_latest_ref_month` records the newest one for the leakage check.
 
 ### Reference layer
 
@@ -95,6 +109,10 @@ wouldn't notice.
 per county x month, so the result is too. LEFT keeps spine rows with no data (they show up as NULL), which is exactly
 what we want to count. An inner join would hide the gaps we're looking for.
 
+**staging.fred_monthly: complete_months JOIN lags ON series_id.** Left: one row per series x month. Right: one row per
+series (the lag table from config, 7 rows). Many-to-one, so still one row per series x month. Without it there would be no
+available_month; as an inner join it also drops any series not listed in the config.
+
 ## Interview questions
 
 **Q: Why a separate preflight script?** A: Loads take minutes; a bad token should fail in seconds with a clear
@@ -119,3 +137,10 @@ The spine says what *should* exist, and a LEFT JOIN against it turns each missin
 **Q: Why exclude the Alaska counties rather than patch them?** A: Valdez-Cordova split into two new census areas in 2020,
 so no single FIPS has a continuous series. Stitching them would invent a geography; excluding them costs 3 counties
 (~0.006% of the labor force), which is documented in the gap report.
+
+**Q: How do you stop FRED data from leaking the future?** A: Each series gets a fixed publication lag from the config, and
+a value is only attached to a decision in the month it would have been published (`available_month = ref_month + lag`).
+The lags are conservative (CPI and industrial production: 2 months, others: 1).
+
+**Q: What doesn't the FRED rule handle?** A: Revisions. FRED serves today's revised numbers (e.g. payrolls get revised),
+not what was first published. Using initial releases (ALFRED vintages) would fix that; it is listed as a limitation.

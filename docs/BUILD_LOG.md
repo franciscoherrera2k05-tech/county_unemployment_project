@@ -17,7 +17,7 @@ before reuse (noted per phase).
 - [x] Phase 1 — LAUS ingest -> raw
 - [x] Phase 2 — LAUS staging + tests
 - [x] Phase 3 — County reference + month spine + geography gaps
-- [ ] Phase 4 — FRED
+- [x] Phase 4 — FRED
 - [ ] Phase 5 — Panel + target + leakage check
 - [ ] Phase 6 — Wrap-up
 
@@ -89,3 +89,19 @@ Verified facts (re-checked 2026-10-20 from `la.txt`, `la.series`, `la.measure`, 
 - Tests: unique grain on ref.state/ref.county/ref.month_spine/ref.geography_gap_report; 51 states; every staging county is in
   ref.county; spine consecutive and rows = counties x months; gap report covers every county. 11 passed.
 - Elapsed at end of phase 3: ~10 min.
+
+### Phase 4 — FRED
+
+- Verified with real `fred/series` calls (2026-10-20): UNRATE M SA; FEDFUNDS M NSA; CPIAUCSL M SA; T10Y2Y **D** NSA;
+  INDPRO M SA; PAYEMS M SA; ICSA **W** SA (week-ending dates). All exist. Missing marker is `.`: UNRATE and CPIAUCSL have
+  no 2025-10 value (shutdown); T10Y2Y has 171 `.` days (market holidays).
+- `ingest_fred` (`src/ingest/fred.py`): observations from 2011-01-01 (one year before `laus_min_year`, for YoY), one temp CSV,
+  one `INSERT ... SELECT`, same-day snapshot replacement. 5,891 rows.
+- **Simple timing rule (simplicity rules; replaces CLAUDE.md section 10.3):** the value for reference month M counts as known in
+  month `M + fred_lag_months[series]`. No `output_type=4` / initial-release logic; FRED's revised values are used (limitation).
+- `staging.fred_monthly` (1,323 rows; series x ref_month): daily/weekly -> monthly mean; current incomplete month dropped;
+  change columns via `LAG` per series (test confirms consecutive months); `available_month`.
+- `staging.fred_by_available_month` (190 rows; 2011-02..2026-11): pivot to one row per `available_month` with the 9 FRED features
+  of CLAUDE.md section 11, plus `fred_latest_ref_month` for the leakage check.
+- Tests: unique grain on the three FRED tables, 7 series, consecutive months per series. 15 passed.
+- Elapsed at end of phase 4: ~12 min.

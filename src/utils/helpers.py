@@ -92,6 +92,8 @@ def sql_params(cfg):
         "laus_lag": cfg["timing"]["laus_release_lag_months"],
         "horizon": cfg["target"]["horizon_months"],
         "threshold": cfg["target"]["threshold_pp"],
+        # e.g. "('UNRATE', 1), ('CPIAUCSL', 2)" so SQL can use it as a small VALUES table
+        "fred_lag_values": ", ".join(f"('{s}', {lag})" for s, lag in cfg["timing"]["fred_lag_months"].items()),
     }
 
 
