@@ -1,4 +1,4 @@
-# Monthly Prefect flow: BLS LAUS + FRED downloads -> raw vintages -> dbt build -> score.py (predictions).
+# Monthly Prefect flow: BLS LAUS + FRED downloads -> raw vintages -> dbt build -> score.py (predictions, outcomes).
 import os, subprocess, sys
 from pathlib import Path
 from prefect import flow, task, get_run_logger
@@ -52,6 +52,11 @@ def score_newest():
     run([sys.executable, "score.py"])
 
 
+@task
+def append_outcomes():
+    run([sys.executable, "score.py", "--outcomes"])
+
+
 @flow(name="county-unemployment-monthly")
 def monthly():
     load_secrets()
@@ -59,6 +64,7 @@ def monthly():
     ingest_fred()
     dbt_build()
     score_newest()
+    append_outcomes()
 
 
 if __name__ == "__main__":
