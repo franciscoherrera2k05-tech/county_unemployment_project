@@ -11,7 +11,7 @@ Resume point for the staged build. Times are UTC wall clock.
 - [x] Phase 0 — Scaffold + preflight
 - [x] Phase 1 — LAUS ingest -> raw
 - [x] Phase 2 — LAUS staging + tests
-- [ ] Phase 3 — County reference + month spine + geography gaps
+- [x] Phase 3 — County reference + month spine + geography gaps
 - [ ] Phase 4 — FRED
 - [ ] Phase 5 — Panel + target + leakage test
 - [ ] Phase 6 — Wrap-up
@@ -65,3 +65,23 @@ Implementation:
   integration (raw/staging grain, 5-char FIPS, rate in [0,100], available_date > month, nulls only where marker, LF >= employment,
   nulls only in 2025-10). 10 passed.
 - Elapsed at end of phase 2: ~8 min.
+
+### Phase 3 — County reference + month spine + geography gaps
+
+- `ingest_fips` flow (`src/ingest/fips.py`): reads `la.area_type` to find the code for "Counties and equivalents" (verified = `F`),
+  streams `la.area` to a temp file, keeps `F` rows with `CN` area codes joined to the static 51-row state table -> `ref.county`
+  (3,147 counties, 51 states; Puerto Rico's 78 municipios excluded by design). County name = area_text without the ", XX" suffix.
+- `ref.month_spine`: 3,144 counties (those in ref.county with any staging row) x 176 months (2012-01..2026-08) = 553,344 rows.
+  Spine end = latest month with non-null rates for >= 50% of counties (2026-08; the 3 counties with 2026-09 data are ahead of the release).
+  `is_national_gap_month` flags months with < 50% coverage: only **2025-10** (shutdown; BLS footnote G). It is not treated as a county gap.
+- `ref.geography_gap_report` (one row per county) and `ref.county_exclusions` (status <> ok). **6 ref counties flagged, all Alaska:**
+  - no data in window (discontinued 2009-2010 Alaska census areas): 02201 Prince of Wales-Outer Ketchikan, 02232 Skagway-Hoonah-Angoon, 02280 Wrangell-Petersburg
+  - disappears early: 02261 Valdez-Cordova (ends 2019-12)
+  - appears late: 02063 Chugach, 02066 Copper River (start 2020-01; Valdez-Cordova split)
+  - Of the 3,144 counties with data in the window, 3 are excluded (0.095%); their average labor force is ~10.1k of ~162.2M total (~0.006%).
+- No discontinuities found for Connecticut (BLS re-estimated the 9 planning regions back to 1990) or Virginia (no independent-city
+  series in our window appear/disappear; Bedford city is absent from the current files).
+- Ref tables are rebuilt by DELETE + INSERT in a transaction (CREATE OR REPLACE kept for staging/marts per spec); added `sql/ref/`.
+- Tests: ref.county grain/FIPS/51 states, staging counties all in ref.county, spine grain + no gaps + rows = counties x months,
+  gap-report coverage, exclusion consistency, non-excluded counties fully observed outside national-gap months. 14 passed.
+- Elapsed at end of phase 3: ~9 min.

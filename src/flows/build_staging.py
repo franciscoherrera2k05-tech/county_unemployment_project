@@ -5,6 +5,7 @@ import logging
 
 from prefect import flow, get_run_logger, task
 
+from src.features.ref_tables import build_ref_derived
 from src.utils.db import connect
 from src.utils.sql import render
 
@@ -33,7 +34,9 @@ def run_sql_files(con, files: list[str], logger=None) -> dict[str, int]:
 def build_staging_tables(files: list[str]) -> dict[str, int]:
     con = connect()
     try:
-        return run_sql_files(con, files)
+        counts = run_sql_files(con, files)
+        counts.update(build_ref_derived(con, _logger()))
+        return counts
     finally:
         con.close()
 
