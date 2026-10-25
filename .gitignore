@@ -1,14 +1,24 @@
-# Secrets, local data, caches. Never commit data or .env.
+# Secrets, local data, caches, and local-only project files. Never commit data or .env.
 .env
+.venv/
 data/
 __pycache__/
 *.pyc
 .ipynb_checkpoints/
-.venv/
 *.duckdb
 *.duckdb.wal
-dbt_project/target/
-dbt_project/logs/
-dbt_project/dbt_packages/
 logs/
-dbt_project/.user.yml
+
+# local-only (kept on disk, not in git)
+/models/
+.python-version
+pyproject.toml
+uv.lock
+CLAUDE.md
+.claude/
+
+# dbt build output
+pipeline/dbt_project/target/
+pipeline/dbt_project/logs/
+pipeline/dbt_project/dbt_packages/
+pipeline/dbt_project/.user.yml

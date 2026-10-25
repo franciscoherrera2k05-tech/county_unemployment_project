@@ -1,4 +1,4 @@
-# Monthly Prefect flow: BLS LAUS + FRED downloads -> raw vintages -> dbt build -> score.py (predictions, outcomes).
+# Monthly Prefect flow: BLS LAUS + FRED downloads -> raw vintages -> dbt build (staging + county_month mart). Runs from pipeline/.
 import os, subprocess, sys
 from pathlib import Path
 from prefect import flow, task, get_run_logger
@@ -23,9 +23,6 @@ def run(args):
     get_run_logger().info(out.stdout[-3000:])
     if out.returncode != 0:
         raise RuntimeError(f"{args[:3]} failed:\n{out.stdout[-2000:]}\n{out.stderr[-2000:]}")
-    for line in out.stdout.splitlines():
-        if line.startswith("WARNING"):
-            get_run_logger().warning(line)
 
 
 @task(retries=2, retry_delay_seconds=300)
@@ -44,27 +41,12 @@ def dbt_build():
     run([dbt, "build", "--project-dir", "dbt_project", "--profiles-dir", "dbt_project"])
 
 
-@task
-def score_newest():
-    if not (ROOT / "models" / "current.txt").exists():
-        get_run_logger().warning("models/current.txt is missing; skipping scoring until a model is saved")
-        return
-    run([sys.executable, "score.py"])
-
-
-@task
-def append_outcomes():
-    run([sys.executable, "score.py", "--outcomes"])
-
-
 @flow(name="county-unemployment-monthly")
 def monthly():
     load_secrets()
     ingest_laus()
     ingest_fred()
     dbt_build()
-    score_newest()
-    append_outcomes()
 
 
 if __name__ == "__main__":
